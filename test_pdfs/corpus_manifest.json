@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "name": "attention",
+      "pdf": "test_pdfs/attention.pdf",
+      "truth": "test_pdfs/attention.md",
+      "min_pass_rate_pct": 97.0,
+      "max_fail_rate_pct": 0.5
+    },
+    {
+      "name": "shannon1948",
+      "pdf": "test_pdfs/shannon1948.pdf",
+      "truth": "test_pdfs/shannon1948.md",
+      "min_pass_rate_pct": 97.0,
+      "max_fail_rate_pct": 0.5
+    }
+  ]
+}

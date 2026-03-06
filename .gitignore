@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Build outputs
+vargasparse
+*.exe
+*.out
+
+# Logs / temp
+*.log
+/tmp/
+
+# Coverage
+coverage.out
+
+# Editor
+.vscode/
+.idea/
+
+# Go cache/build artifacts
+bin/

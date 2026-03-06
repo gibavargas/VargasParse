@@ -1,0 +1,143 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "VargasParse Document",
+  "description": "Canonical JSON output for a processed PDF document",
+  "type": "object",
+  "required": ["source_file", "total_pages", "pages"],
+  "properties": {
+    "source_file": {
+      "type": "string",
+      "description": "Path to the original PDF file"
+    },
+    "total_pages": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "pages_with_text": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "processing_ms": {
+      "type": "integer",
+      "description": "Total wall-clock processing time in milliseconds"
+    },
+    "profile": {
+      "type": "string",
+      "enum": ["accuracy", "balanced", "legacy"]
+    },
+    "pages": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/Page" }
+    },
+    "metrics": { "$ref": "#/definitions/Metrics" }
+  },
+  "definitions": {
+    "Page": {
+      "type": "object",
+      "required": ["page_num", "text", "method", "confidence"],
+      "properties": {
+        "page_num": { "type": "integer", "minimum": 1 },
+        "text": { "type": "string" },
+        "method": {
+          "type": "string",
+          "enum": ["fast", "ocr", "sidecar", "compare", "ocr-fail", "skip"],
+          "description": "Extraction method used for this page"
+        },
+        "confidence": {
+          "type": "number", "minimum": 0, "maximum": 1,
+          "description": "Ensemble quality confidence (0.0–1.0)"
+        },
+        "duration_ms": { "type": "integer" },
+        "blocks": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Block" },
+          "description": "Structured text blocks"
+        },
+        "tables": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Table" }
+        },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "engine_trace": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ordered list of extraction stages visited"
+        },
+        "quality_signals": {
+          "type": "object",
+          "additionalProperties": { "type": "number" },
+          "description": "Raw quality model signals used for routing"
+        },
+        "language_detected": {
+          "type": "string",
+          "description": "Detected or hinted language code"
+        },
+        "ocr_applied": {
+          "type": "boolean"
+        },
+        "error_code": {
+          "type": "string",
+          "description": "Machine-readable terminal error code for page failures"
+        }
+      }
+    },
+    "Block": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["paragraph", "heading", "list", "key_value", "caption", "markdown"] },
+        "text": { "type": "string" },
+        "bbox": { "$ref": "#/definitions/BBox" },
+        "reading_order": { "type": "integer" },
+        "confidence": { "type": "number" },
+        "source_method": { "type": "string" }
+      }
+    },
+    "Table": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "bbox": { "$ref": "#/definitions/BBox" },
+        "rows": { "type": "integer" },
+        "cols": { "type": "integer" },
+        "cells": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Cell" }
+        }
+      }
+    },
+    "Cell": {
+      "type": "object",
+      "properties": {
+        "row": { "type": "integer" },
+        "col": { "type": "integer" },
+        "row_span": { "type": "integer", "default": 1 },
+        "col_span": { "type": "integer", "default": 1 },
+        "text": { "type": "string" }
+      }
+    },
+    "BBox": {
+      "type": "object",
+      "description": "Bounding box in PDF points (origin: bottom-left)",
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "w": { "type": "number" },
+        "h": { "type": "number" }
+      }
+    },
+    "Metrics": {
+      "type": "object",
+      "properties": {
+        "fast_pages": { "type": "integer" },
+        "ocr_pages": { "type": "integer" },
+        "compare_pages": { "type": "integer" },
+        "failed_pages": { "type": "integer" },
+        "skipped_pages": { "type": "integer" }
+      }
+    }
+  }
+}
