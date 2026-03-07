@@ -9,10 +9,18 @@
 ```bash
 go test ./...
 go vet ./...
+make test-risk-gates
+```
+
+If extraction behavior changed, also run:
+
+```bash
 make benchmark-gate
 ```
 
-4. Open PR with:
+4. Ensure CI is green on your PR (same default checks as above).
+
+5. Open PR with:
 - change summary
 - risk assessment
 - before/after metrics (if parser behavior changed)

@@ -9,19 +9,31 @@ import (
 	"strings"
 )
 
+var lookPath = exec.LookPath
+
+type command interface {
+	CombinedOutput() ([]byte, error)
+	Output() ([]byte, error)
+}
+
 // OCR wraps local OCR toolchain calls (pdftoppm + tesseract).
 type OCR struct {
 	pdftoppmPath  string
 	tesseractPath string
+
+	makeCommand func(ctx context.Context, name string, args ...string) command
+	mkTempDir   func(dir, pattern string) (string, error)
+	glob        func(pattern string) ([]string, error)
+	removeAll   func(path string) error
 }
 
 // NewOCR validates that OCR dependencies are available.
 func NewOCR() (*OCR, error) {
-	pdftoppmPath, err := exec.LookPath("pdftoppm")
+	pdftoppmPath, err := lookPath("pdftoppm")
 	if err != nil {
 		return nil, fmt.Errorf("pdftoppm not found: %w", err)
 	}
-	tesseractPath, err := exec.LookPath("tesseract")
+	tesseractPath, err := lookPath("tesseract")
 	if err != nil {
 		return nil, fmt.Errorf("tesseract not found: %w", err)
 	}
@@ -29,6 +41,35 @@ func NewOCR() (*OCR, error) {
 		pdftoppmPath:  pdftoppmPath,
 		tesseractPath: tesseractPath,
 	}, nil
+}
+
+func (o *OCR) commandFactory(ctx context.Context, name string, args ...string) command {
+	if o.makeCommand != nil {
+		return o.makeCommand(ctx, name, args...)
+	}
+	return exec.CommandContext(ctx, name, args...)
+}
+
+func (o *OCR) tempDir(dir, pattern string) (string, error) {
+	if o.mkTempDir != nil {
+		return o.mkTempDir(dir, pattern)
+	}
+	return os.MkdirTemp(dir, pattern)
+}
+
+func (o *OCR) globFiles(pattern string) ([]string, error) {
+	if o.glob != nil {
+		return o.glob(pattern)
+	}
+	return filepath.Glob(pattern)
+}
+
+func (o *OCR) cleanup(path string) {
+	if o.removeAll != nil {
+		_ = o.removeAll(path)
+		return
+	}
+	_ = os.RemoveAll(path)
 }
 
 // ProcessPage rasterizes a PDF page to PNG and runs Tesseract OCR.
@@ -39,14 +80,14 @@ func (o *OCR) ProcessPage(ctx context.Context, pdfPath string, pageIndex int, la
 	}
 
 	pageNum := pageIndex + 1
-	tmpDir, err := os.MkdirTemp("", "vargasparse-ocr-*")
+	tmpDir, err := o.tempDir("", "vargasparse-ocr-*")
 	if err != nil {
 		return "", 0, fmt.Errorf("mktemp: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer o.cleanup(tmpDir)
 
 	prefix := filepath.Join(tmpDir, "page")
-	rasterCmd := exec.CommandContext(
+	rasterCmd := o.commandFactory(
 		ctx,
 		o.pdftoppmPath,
 		"-f", fmt.Sprintf("%d", pageNum),
@@ -60,7 +101,7 @@ func (o *OCR) ProcessPage(ctx context.Context, pdfPath string, pageIndex int, la
 		return "", 0, fmt.Errorf("pdftoppm: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
-	pngFiles, err := filepath.Glob(prefix + "*.png")
+	pngFiles, err := o.globFiles(prefix + "*.png")
 	if err != nil {
 		return "", 0, fmt.Errorf("glob png: %w", err)
 	}
@@ -76,7 +117,7 @@ func (o *OCR) ProcessPage(ctx context.Context, pdfPath string, pageIndex int, la
 	// Treat page as a uniform text block for stability on mixed PDFs.
 	args = append(args, "--psm", "6")
 
-	ocrCmd := exec.CommandContext(ctx, o.tesseractPath, args...)
+	ocrCmd := o.commandFactory(ctx, o.tesseractPath, args...)
 	out, err := ocrCmd.Output()
 	if err != nil {
 		return "", 0, fmt.Errorf("tesseract: %w", err)

@@ -52,5 +52,37 @@ Use `--fail-on-missing-deps` in production automation.
 
 1. `go test ./...`
 2. `go vet ./...`
-3. benchmark gate on manifest
-4. inspect report diffs before deployment
+3. `make test-risk-gates`
+4. benchmark gate on manifest
+5. inspect report diffs before deployment
+
+## CI Pipeline
+
+Default GitHub Actions pipeline (`.github/workflows/ci.yml`) runs on every PR and push to `main`:
+
+1. `go test ./...`
+2. `go vet ./...`
+3. `./scripts/test-risk-gates.sh`
+
+Smoke tests are excluded from default CI because they depend on local OCR/VLM binaries.
+
+## CI Failure Triage
+
+1. If `go test` fails, fix regressions first before rerunning any gates.
+2. If `go vet` fails, address correctness warnings (not formatting-only issues).
+3. If risk-gates fail, inspect package coverage drift and add targeted tests.
+4. If benchmark gate fails, inspect benchmark report and compare CER/WER + pass/fail rates against previous baseline.
+
+## Smoke Tests (Opt-In)
+
+Use smoke tests only in environments with local binaries/models configured.
+
+```bash
+# OCR smoke only
+VARGASPARSE_SMOKE=1 go test -v -run Smoke ./internal/ocr
+
+# OCR + VLM smoke
+VARGASPARSE_SMOKE=1 VARGASPARSE_TEST_OLLAMA=1 go test -v -run Smoke ./internal/ocr ./internal/llamacpp
+```
+
+Default CI should keep these off unless a dedicated smoke runner is provisioned.
