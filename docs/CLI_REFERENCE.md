@@ -19,6 +19,15 @@ vargasparse [flags] <input.pdf> [output.txt|output.md|output.json]
 - `--engine deterministic|hybrid|legacy`
 - `--enable-vlm-rescue`
 - `--model <ollama_model_name>`
+- `--render-dpi <float>` DPI for rasterizing PDF pages for VLM (default `150`)
+- `--vlm-retry-delay <duration>` delay between VLM retry attempts (default `300ms`)
+
+## Input Source Flags
+
+- `--input-url <pdf_url>` download and process one PDF from URL
+- `--batch-path <dir>` process all valid PDFs in a directory
+- `--default-batch-path <dir>` directory used for batch mode when no input argument is provided
+- `--batch-output-dir <dir>` output destination for batch files
 
 ## Reporting/Gating Flags
 
