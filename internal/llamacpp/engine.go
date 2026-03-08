@@ -8,8 +8,25 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"time"
+)
+
+// DefaultRetryDelay is the default pause between VLM retry attempts.
+const DefaultRetryDelay = 300 * time.Millisecond
+
+var (
+	defaultAPIBaseURL = "http://127.0.0.1:11434/api"
+	defaultHealthURL  = "http://127.0.0.1:11434/"
+	serveCommand      = func() *exec.Cmd { return exec.Command("ollama", "serve") }
+	sleepFn           = time.Sleep
+	newHTTPClient     = func(timeout time.Duration) *http.Client { return &http.Client{Timeout: timeout} }
+
+	signalProcess   = func(p *os.Process, s os.Signal) error { return p.Signal(s) }
+	killProcess     = func(p *os.Process) error { return p.Kill() }
+	waitCmd         = func(cmd *exec.Cmd) error { return cmd.Wait() }
+	shutdownTimeout = 2 * time.Second
 )
 
 // Engine manages the local Ollama LLM daemon for purely offline Vision parsing.
@@ -17,7 +34,9 @@ type Engine struct {
 	cmd        *exec.Cmd
 	modelName  string
 	apiBaseURL string
+	healthURL  string
 	client     *http.Client
+	retryDelay time.Duration
 }
 
 // NewEngine safely boots up the Ollama daemon as a child process if it isn't already
@@ -25,10 +44,10 @@ type Engine struct {
 func NewEngine(modelName string) (*Engine, error) {
 	e := &Engine{
 		modelName:  modelName,
-		apiBaseURL: "http://127.0.0.1:11434/api",
-		client: &http.Client{
-			Timeout: 600 * time.Second, // VLMs can take a while on CPUs
-		},
+		apiBaseURL: defaultAPIBaseURL,
+		healthURL:  defaultHealthURL,
+		client:     newHTTPClient(600 * time.Second), // VLMs can take a while on CPUs
+		retryDelay: DefaultRetryDelay,
 	}
 
 	// Try to ping the local ollama server first. If it's already running, we just attach.
@@ -38,7 +57,7 @@ func NewEngine(modelName string) (*Engine, error) {
 	}
 
 	// If it's not running, we boot it as a managed subprocess.
-	e.cmd = exec.Command("ollama", "serve")
+	e.cmd = serveCommand()
 	if err := e.cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start ollama subprocess: %w. Is Ollama installed?", err)
 	}
@@ -46,7 +65,7 @@ func NewEngine(modelName string) (*Engine, error) {
 	// Wait for healthcheck
 	healthy := false
 	for i := 0; i < 15; i++ {
-		time.Sleep(1 * time.Second)
+		sleepFn(1 * time.Second)
 		if err := e.ping(); err == nil {
 			healthy = true
 			break
@@ -63,7 +82,7 @@ func NewEngine(modelName string) (*Engine, error) {
 }
 
 func (e *Engine) ping() error {
-	resp, err := e.client.Get(fmt.Sprintf("http://127.0.0.1:11434/"))
+	resp, err := e.client.Get(e.healthURL)
 	if err != nil {
 		return err
 	}
@@ -134,16 +153,52 @@ func (e *Engine) ExtractMarkdownWithRetry(ctx context.Context, imgBase64, system
 		if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return "", err
 		}
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(e.retryDelay)
 	}
 	return "", fmt.Errorf("vlm extraction failed after %d attempt(s): %w", attempts, lastErr)
 }
 
+// SetRetryDelay overrides the pause between VLM retry attempts.
+func (e *Engine) SetRetryDelay(d time.Duration) {
+	if d > 0 {
+		e.retryDelay = d
+	}
+}
+
 // Close gracefully stops the Ollama subprocess if VargasParse instantiated it.
 func (e *Engine) Close() error {
-	if e.cmd != nil && e.cmd.Process != nil {
-		fmt.Println("🛑 Shutting down managed Ollama daemon.")
-		e.cmd.Process.Kill()
+	if e.cmd == nil || e.cmd.Process == nil {
+		return nil
 	}
+
+	fmt.Println("🛑 Shutting down managed Ollama daemon.")
+	proc := e.cmd.Process
+	done := make(chan struct{})
+	go func(cmd *exec.Cmd) {
+		_ = waitCmd(cmd)
+		close(done)
+	}(e.cmd)
+
+	if err := signalProcess(proc, os.Interrupt); err != nil {
+		_ = killProcess(proc)
+		select {
+		case <-done:
+		case <-time.After(500 * time.Millisecond):
+		}
+		e.cmd = nil
+		return nil
+	}
+
+	select {
+	case <-done:
+	case <-time.After(shutdownTimeout):
+		_ = killProcess(proc)
+		select {
+		case <-done:
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+
+	e.cmd = nil
 	return nil
 }
