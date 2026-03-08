@@ -97,6 +97,7 @@ func runTarget(index, total int, t target, ctx runContext) (bool, bool) {
 		ModelName:          ctx.opts.model,
 		EngineMode:         ctx.opts.engine,
 		EnableVLMRescue:    ctx.opts.enableVLMRescue,
+		RenderDPI:          ctx.opts.renderDPI,
 		NativeExtractor:    ctx.runtimeDeps.native,
 		OCRExtractor:       ctx.runtimeDeps.ocr,
 		VLMRescueExtractor: ctx.runtimeDeps.vlm,

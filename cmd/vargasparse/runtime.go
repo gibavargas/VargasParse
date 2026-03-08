@@ -51,7 +51,10 @@ func buildRuntime(opts options) (*runtimeDeps, error) {
 			}
 			deps.warnings = append(deps.warnings, fmt.Sprintf("VLM rescue unavailable: %v", err))
 		} else {
-			ex := pipeline.NewOllamaVLMRescueExtractor(vlmEngine)
+			if opts.vlmRetryDelay > 0 {
+				vlmEngine.SetRetryDelay(opts.vlmRetryDelay)
+			}
+			ex := pipeline.NewOllamaVLMRescueExtractor(vlmEngine, opts.renderDPI)
 			deps.vlm = ex
 			deps.cleanup = func() { _ = ex.Close() }
 		}

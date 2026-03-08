@@ -13,6 +13,9 @@ import (
 	"time"
 )
 
+// DefaultRetryDelay is the default pause between VLM retry attempts.
+const DefaultRetryDelay = 300 * time.Millisecond
+
 var (
 	defaultAPIBaseURL = "http://127.0.0.1:11434/api"
 	defaultHealthURL  = "http://127.0.0.1:11434/"
@@ -33,6 +36,7 @@ type Engine struct {
 	apiBaseURL string
 	healthURL  string
 	client     *http.Client
+	retryDelay time.Duration
 }
 
 // NewEngine safely boots up the Ollama daemon as a child process if it isn't already
@@ -43,6 +47,7 @@ func NewEngine(modelName string) (*Engine, error) {
 		apiBaseURL: defaultAPIBaseURL,
 		healthURL:  defaultHealthURL,
 		client:     newHTTPClient(600 * time.Second), // VLMs can take a while on CPUs
+		retryDelay: DefaultRetryDelay,
 	}
 
 	// Try to ping the local ollama server first. If it's already running, we just attach.
@@ -148,9 +153,16 @@ func (e *Engine) ExtractMarkdownWithRetry(ctx context.Context, imgBase64, system
 		if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return "", err
 		}
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(e.retryDelay)
 	}
 	return "", fmt.Errorf("vlm extraction failed after %d attempt(s): %w", attempts, lastErr)
+}
+
+// SetRetryDelay overrides the pause between VLM retry attempts.
+func (e *Engine) SetRetryDelay(d time.Duration) {
+	if d > 0 {
+		e.retryDelay = d
+	}
 }
 
 // Close gracefully stops the Ollama subprocess if VargasParse instantiated it.

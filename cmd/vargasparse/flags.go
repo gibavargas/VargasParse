@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"vargasparse/internal/pipeline"
 )
@@ -26,6 +27,8 @@ type options struct {
 	batchPath       string
 	defaultBatch    string
 	batchOutputDir  string
+	renderDPI       float64
+	vlmRetryDelay   time.Duration
 }
 
 func parseFlags() options {
@@ -48,6 +51,8 @@ func parseFlags() options {
 	batchPathFlag := flag.String("batch-path", "", "Process all PDFs from this directory")
 	defaultBatchPathFlag := flag.String("default-batch-path", "test_pdfs", "Default batch directory used when no input path is provided")
 	batchOutputDirFlag := flag.String("batch-output-dir", "", "Output directory for batch mode (default: same as batch directory)")
+	renderDPIFlag := flag.Float64("render-dpi", 150, "DPI for rasterizing PDF pages for VLM (default 150)")
+	vlmRetryDelayFlag := flag.Duration("vlm-retry-delay", 300*time.Millisecond, "Delay between VLM retry attempts (e.g. 300ms, 1s)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: vargasparse [flags] <input.pdf|input_dir> [output_path_or_dir]\n\nFlags:\n")
@@ -73,6 +78,8 @@ func parseFlags() options {
 		batchPath:       *batchPathFlag,
 		defaultBatch:    *defaultBatchPathFlag,
 		batchOutputDir:  *batchOutputDirFlag,
+		renderDPI:       *renderDPIFlag,
+		vlmRetryDelay:   *vlmRetryDelayFlag,
 	}
 }
 
