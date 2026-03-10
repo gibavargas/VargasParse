@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +59,21 @@ type timeoutNative struct{}
 func (t timeoutNative) Extract(ctx context.Context, pdfPath string, pageIndex int) (string, string, []Block, []Table, error) {
 	<-ctx.Done()
 	return "", "", nil, nil, ctx.Err()
+}
+
+type staticDecider struct {
+	res quality.QualityResult
+}
+
+func (d staticDecider) Assess(text string, dict map[string]bool) quality.QualityResult {
+	r := d.res
+	if strings.TrimSpace(text) == "" && r.Decision == quality.Accept {
+		r.Decision = quality.Reject
+		if r.Confidence > 0.4 {
+			r.Confidence = 0.4
+		}
+	}
+	return r
 }
 
 var mockDict = map[string]bool{
@@ -246,5 +262,116 @@ func TestProfileDecisionAccuracy(t *testing.T) {
 	q := quality.QualityResult{Confidence: 0.90, Decision: quality.Accept}
 	if d := profileDecision("accuracy", q); d != quality.Compare {
 		t.Fatalf("expected compare, got %v", d)
+	}
+}
+
+func TestShouldUseVLM(t *testing.T) {
+	cfg := &Config{EngineMode: EngineDeterministic, EnableVLMRescue: false}
+	if shouldUseVLM(cfg) {
+		t.Fatal("deterministic without flag should not use VLM")
+	}
+	cfg.EnableVLMRescue = true
+	if !shouldUseVLM(cfg) {
+		t.Fatal("deterministic with rescue flag should use VLM")
+	}
+	cfg.EngineMode = EngineHybrid
+	cfg.EnableVLMRescue = false
+	if !shouldUseVLM(cfg) {
+		t.Fatal("hybrid should always use VLM lane")
+	}
+}
+
+func TestDetectLanguage(t *testing.T) {
+	if got := detectLanguage("Olá, coração", "auto"); got != "por" {
+		t.Fatalf("detectLanguage got %q", got)
+	}
+	if got := detectLanguage("hello world", "eng"); got != "eng" {
+		t.Fatalf("detectLanguage got %q", got)
+	}
+	if got := detectLanguage("   ", "auto"); got != "unknown" {
+		t.Fatalf("detectLanguage got %q", got)
+	}
+}
+
+func TestRunOCRMapping(t *testing.T) {
+	cfg := baseConfig()
+	cfg.QualityDecider = staticDecider{res: quality.QualityResult{Confidence: 0.9, Decision: quality.Accept}}
+
+	cfg.OCRExtractor = mockOCRExtractor{err: fmt.Errorf("executable file not found")}
+	_, _, _, _, code, _ := runOCR(context.Background(), cfg, 0)
+	if code != ErrorCodeDependencyMissing {
+		t.Fatalf("code=%q want %q", code, ErrorCodeDependencyMissing)
+	}
+
+	cfg.OCRExtractor = mockOCRExtractor{err: context.DeadlineExceeded}
+	_, _, _, _, code, _ = runOCR(context.Background(), cfg, 0)
+	if code != ErrorCodeTimeout {
+		t.Fatalf("code=%q want %q", code, ErrorCodeTimeout)
+	}
+
+	cfg.OCRExtractor = mockOCRExtractor{text: "", source: "tesseract"}
+	_, _, _, _, code, _ = runOCR(context.Background(), cfg, 0)
+	if code != ErrorCodeNoText {
+		t.Fatalf("code=%q want %q", code, ErrorCodeNoText)
+	}
+}
+
+func TestRunVLMRescueEmpty(t *testing.T) {
+	cfg := baseConfig()
+	cfg.VLMRescueExtractor = mockVLMExtractor{text: "", source: "ollama_vlm"}
+	text, conf, blocks, err := runVLMRescue(context.Background(), cfg, 0)
+	if err != nil {
+		t.Fatalf("runVLMRescue error: %v", err)
+	}
+	if text != "" || conf != 0 || len(blocks) != 0 {
+		t.Fatalf("expected empty rescue response, got text=%q conf=%v blocks=%d", text, conf, len(blocks))
+	}
+}
+
+func TestLegacyModePrimaryVLMWins(t *testing.T) {
+	cfg := baseConfig()
+	cfg.EngineMode = EngineLegacy
+	cfg.NativeExtractor = mockNativeExtractor{text: "cid(1) cid(2)", source: "pdftotext"}
+	cfg.OCRExtractor = mockOCRExtractor{text: "", source: "tesseract"}
+	cfg.VLMRescueExtractor = mockVLMExtractor{text: "clean vlm text", source: "ollama_vlm"}
+	cfg.QualityDecider = staticDecider{res: quality.QualityResult{
+		Confidence: 0.85,
+		Decision:   quality.Accept,
+	}}
+
+	res := processPage(context.Background(), cfg, 0)
+	if res.Method != progress.MethodFast {
+		t.Fatalf("method=%q want %q", res.Method, progress.MethodFast)
+	}
+	if !strings.Contains(res.Text, "clean vlm text") {
+		t.Fatalf("unexpected text %q", res.Text)
+	}
+}
+
+func TestRunMaintainsPageOrder(t *testing.T) {
+	cfg := baseConfig()
+	cfg.NumWorkers = 4
+	cfg.NativeExtractor = mockNativeExtractor{text: "hello world clean text", source: "pdftotext"}
+	cfg.OCRExtractor = mockOCRExtractor{text: "", source: "tesseract"}
+	cfg.QualityDecider = defaultQualityDecider{}
+
+	progressCh := make(chan progress.Event, 10)
+	results := Run(cfg, 10, progressCh)
+	close(progressCh)
+	for i, r := range results {
+		want := i + 1
+		if r.PageNum != want {
+			t.Fatalf("results out of order at i=%d: page=%d", i, r.PageNum)
+		}
+	}
+}
+
+func TestComputeWorkers(t *testing.T) {
+	if got := ComputeWorkers(3); got != 3 {
+		t.Fatalf("override workers=%d want 3", got)
+	}
+	got := ComputeWorkers(0)
+	if got < 1 || got > 32 {
+		t.Fatalf("auto workers out of range: %d", got)
 	}
 }

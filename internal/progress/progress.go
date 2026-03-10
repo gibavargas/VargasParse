@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/fatih/color"
 )
 
@@ -37,6 +39,18 @@ type Stats struct {
 	Skip    int
 }
 
+type progressMsg Event
+type completeMsg struct{}
+
+type tuiModel struct {
+	total     int
+	processed int
+	stats     Stats
+	recent    []Event
+	width     int
+	done      bool
+}
+
 var (
 	colorGreen  = color.New(color.FgGreen, color.Bold)
 	colorYellow = color.New(color.FgYellow, color.Bold)
@@ -44,6 +58,20 @@ var (
 	colorGray   = color.New(color.FgHiBlack)
 	colorCyan   = color.New(color.FgCyan, color.Bold)
 	colorWhite  = color.New(color.FgWhite, color.Bold)
+
+	styleTitle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("230")).
+			Background(lipgloss.Color("62")).
+			Padding(0, 1)
+	styleSubtitle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	styleGood     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	styleWarn     = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	styleBad      = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	stylePanel    = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62")).
+			Padding(0, 1)
 )
 
 // IsTTY returns true if stdout is a terminal.
@@ -95,69 +123,158 @@ func PrintConfig(dictWords int, dictDuration time.Duration, pdfName string, numP
 // Close the events channel when all pages are done; the returned
 // channel is closed when the printer has finished flushing.
 func Printer(events <-chan Event, total int, tty bool) (done chan struct{}, stats *Stats) {
+	if tty {
+		return printerTUI(events, total)
+	}
+	return printerPlain(events, total)
+}
+
+func printerPlain(events <-chan Event, total int) (done chan struct{}, stats *Stats) {
 	stats = &Stats{}
 	done = make(chan struct{})
 
 	go func() {
 		defer close(done)
 		processed := 0
-		barWidth := 30
-
 		for ev := range events {
 			processed++
-			switch ev.Method {
-			case MethodFast:
-				stats.Fast++
-			case MethodOCR:
-				stats.OCR++
-			case MethodCompare:
-				stats.Compare++
-			case MethodOCRFail:
-				stats.OCRFail++
-			case MethodSkip:
-				stats.Skip++
-			}
-
-			if tty {
-				fmt.Printf("\r%-60s\n", bar(processed, total, barWidth))
-			}
+			applyStat(stats, ev.Method)
 
 			switch ev.Method {
 			case MethodFast:
-				colorGreen.Printf("  ✓ ")
-				fmt.Printf("Page %4d  fast-extract   (conf: %.0f%%)  %s\n",
-					ev.PageNum, ev.Score*100, FormatDuration(ev.Duration))
+				fmt.Printf("  ✓ Page %4d  fast-extract   (conf: %.0f%%)  %s\n", ev.PageNum, ev.Score*100, FormatDuration(ev.Duration))
 			case MethodOCR:
-				colorYellow.Printf("  ⚡ ")
-				fmt.Printf("Page %4d  OCR fallback   (conf: %.0f%%)  %s\n",
-					ev.PageNum, ev.Score*100, FormatDuration(ev.Duration))
+				fmt.Printf("  ⚡ Page %4d  OCR fallback   (conf: %.0f%%)  %s\n", ev.PageNum, ev.Score*100, FormatDuration(ev.Duration))
 			case MethodCompare:
-				colorYellow.Printf("  ⚖  ")
-				fmt.Printf("Page %4d  compare        (conf: %.0f%%)  %s\n",
-					ev.PageNum, ev.Score*100, FormatDuration(ev.Duration))
+				fmt.Printf("  ⚖  Page %4d  compare        (conf: %.0f%%)  %s\n", ev.PageNum, ev.Score*100, FormatDuration(ev.Duration))
 			case MethodOCRFail:
-				colorRed.Printf("  ✗ ")
-				fmt.Printf("Page %4d  OCR FAILED                    %s\n",
-					ev.PageNum, FormatDuration(ev.Duration))
+				fmt.Printf("  ✗ Page %4d  OCR FAILED                    %s\n", ev.PageNum, FormatDuration(ev.Duration))
 			case MethodSkip:
-				colorGray.Printf("  · ")
-				fmt.Printf("Page %4d  skipped\n", ev.PageNum)
+				fmt.Printf("  · Page %4d  skipped\n", ev.PageNum)
 			}
-
 			if ev.Warning != "" {
-				colorGray.Printf("       ⚠ %s\n", ev.Warning)
+				fmt.Printf("       ⚠ %s\n", ev.Warning)
 			}
-
-			if tty {
-				fmt.Printf("\r%-60s", bar(processed, total, barWidth))
-			}
-		}
-
-		if tty {
-			fmt.Println()
+			fmt.Printf("       %s\n", bar(processed, total, 30))
 		}
 	}()
+
 	return done, stats
+}
+
+func printerTUI(events <-chan Event, total int) (done chan struct{}, stats *Stats) {
+	stats = &Stats{}
+	done = make(chan struct{})
+	model := tuiModel{total: total, width: 90}
+	prog := tea.NewProgram(model, tea.WithAltScreen())
+
+	go func() {
+		finalModel, err := prog.Run()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "progress TUI error: %v\n", err)
+			close(done)
+			return
+		}
+		if m, ok := finalModel.(tuiModel); ok {
+			*stats = m.stats
+		}
+		close(done)
+	}()
+
+	go func() {
+		for ev := range events {
+			prog.Send(progressMsg(ev))
+		}
+		prog.Send(completeMsg{})
+	}()
+
+	return done, stats
+}
+
+func applyStat(stats *Stats, method string) {
+	switch method {
+	case MethodFast:
+		stats.Fast++
+	case MethodOCR:
+		stats.OCR++
+	case MethodCompare:
+		stats.Compare++
+	case MethodOCRFail:
+		stats.OCRFail++
+	case MethodSkip:
+		stats.Skip++
+	}
+}
+
+func (m tuiModel) Init() tea.Cmd { return nil }
+
+func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		return m, nil
+	case progressMsg:
+		ev := Event(msg)
+		m.processed++
+		applyStat(&m.stats, ev.Method)
+		m.recent = append(m.recent, ev)
+		if len(m.recent) > 8 {
+			m.recent = m.recent[len(m.recent)-8:]
+		}
+		return m, nil
+	case completeMsg:
+		m.done = true
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m tuiModel) View() string {
+	barWidth := m.width - 28
+	if barWidth < 18 {
+		barWidth = 18
+	}
+
+	head := styleTitle.Render(" VargasParse Live Dashboard ")
+	sub := styleSubtitle.Render(bar(m.processed, m.total, barWidth))
+
+	statsLine := fmt.Sprintf(
+		"%s  %s  %s  %s",
+		styleGood.Render(fmt.Sprintf("fast: %d", m.stats.Fast)),
+		styleWarn.Render(fmt.Sprintf("compare: %d", m.stats.Compare)),
+		styleWarn.Render(fmt.Sprintf("ocr: %d", m.stats.OCR)),
+		styleBad.Render(fmt.Sprintf("fail: %d", m.stats.OCRFail)),
+	)
+
+	var recent strings.Builder
+	recent.WriteString("Recent Pages\n")
+	for _, ev := range m.recent {
+		method := ev.Method
+		style := styleSubtitle
+		switch ev.Method {
+		case MethodFast:
+			style = styleGood
+		case MethodCompare, MethodOCR:
+			style = styleWarn
+		case MethodOCRFail:
+			style = styleBad
+		}
+		line := fmt.Sprintf("p%-4d %-10s conf=%3.0f%% dur=%-8s", ev.PageNum, method, ev.Score*100, FormatDuration(ev.Duration))
+		if ev.Warning != "" {
+			line += "  ⚠ " + ev.Warning
+		}
+		recent.WriteString(style.Render(line))
+		recent.WriteString("\n")
+	}
+
+	footer := styleSubtitle.Render("Ctrl+C to abort")
+	if m.done {
+		footer = styleGood.Render("Completed")
+	}
+
+	top := stylePanel.Width(m.width - 2).Render(fmt.Sprintf("%s\n%s\n%s", head, sub, statsLine))
+	bottom := stylePanel.Width(m.width - 2).Render(recent.String())
+	return fmt.Sprintf("%s\n%s\n%s\n", top, bottom, footer)
 }
 
 // PrintSummary prints the final summary footer.

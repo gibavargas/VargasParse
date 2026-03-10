@@ -1,4 +1,4 @@
-.PHONY: build run clean vet bootstrap dicts test test-unit test-integration benchmark benchmark-gate lint-metrics
+.PHONY: build run clean vet bootstrap dicts test test-unit test-integration test-cover test-smoke test-risk-gates benchmark benchmark-gate lint-metrics
 
 BINARY = vargasparse
 
@@ -41,6 +41,15 @@ test-unit:
 
 test-integration:
 	go test -v -run Integration ./...
+
+test-cover:
+	go test -cover ./...
+
+test-smoke:
+	VARGASPARSE_SMOKE=1 VARGASPARSE_TEST_OLLAMA=$${VARGASPARSE_TEST_OLLAMA:-0} go test -v -run Smoke ./internal/ocr ./internal/llamacpp
+
+test-risk-gates:
+	./scripts/test-risk-gates.sh
 
 benchmark: build
 	./$(BINARY) --engine deterministic --benchmark-report /tmp/vargasparse-benchmark-attention.json test_pdfs/attention.pdf /tmp/attention.txt

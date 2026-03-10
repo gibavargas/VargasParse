@@ -45,6 +45,29 @@
 - `internal/table`: table extraction from page geometry.
 - `internal/deps`: preflight dependency checks.
 
+## Pipeline File Map
+
+`internal/pipeline` is split by responsibility:
+
+- `pipeline_types.go`: shared public/internal pipeline types and interfaces.
+- `pipeline_pdf.go`: PDF page counting helper.
+- `pipeline_extractors.go`: default native/OCR/VLM extractor adapters and conversion helpers.
+- `pipeline_quality.go`: language parsing/detection and quality decision helpers.
+- `pipeline_orchestrator.go`: per-page decision tree (`processPage`, OCR/VLM routing).
+- `pipeline_run.go`: worker pool runtime (`Run`) and worker-count logic.
+
+This split is intentional and behavior-preserving: same package and exported symbols, cleaner ownership.
+
+## Dependency Wiring Ownership
+
+- `pipeline.Run` no longer instantiates concrete dependencies.
+- Runtime construction is owned by `cmd/vargasparse` via `buildRuntime(...)` in `cmd/vargasparse/runtime.go`.
+- The cmd layer handles:
+- default extractor/decider wiring
+- optional VLM/OCR initialization
+- cleanup lifecycle (`defer runtimeDeps.cleanup()`)
+- degrade-vs-fail policy with `--fail-on-missing-deps`
+
 ## Failure Taxonomy
 
 Per-page machine-readable `error_code` values include:

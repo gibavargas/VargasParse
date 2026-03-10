@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+var (
+	lookPath      = exec.LookPath
+	commandRunner = exec.Command
+)
+
 const (
 	EngineDeterministic = "deterministic"
 	EngineHybrid        = "hybrid"
@@ -90,11 +95,11 @@ func Preflight(opts PreflightOptions) ([]CheckResult, error) {
 
 	for _, t := range tools {
 		cr := CheckResult{Tool: t}
-		path, err := exec.LookPath(t.Name)
+		path, err := lookPath(t.Name)
 		if err == nil {
 			cr.Found = true
 			cr.Path = path
-			if out, err := exec.Command(path, "--version").CombinedOutput(); err == nil {
+			if out, err := commandRunner(path, "--version").CombinedOutput(); err == nil {
 				lines := strings.SplitN(string(out), "\n", 2)
 				cr.Version = strings.TrimSpace(lines[0])
 			}
